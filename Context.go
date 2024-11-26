@@ -1,47 +1,48 @@
 package context
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type Context interface {
+	Value(key interface{}) interface{}
 	Done() <-chan struct{}
-	Value(key any) any
 }
-type backgroundCtx struct {
-	ctx context.Context
-}
+type backgroundCtx struct{ c context.Context }
 
 func Background() Context {
 	if Reference {
-		return context.Background()
+		return &backgroundCtx{c: context.Background()}
 	}
-	return &backgroundCtx{ctx: context.Background()}
+	return &backgroundCtx{}
 }
 func (c backgroundCtx) Done() <-chan struct{} {
 	if Reference {
-		return c.ctx.Done()
+		return c.c.Done()
 	}
 	return nil
 }
-func (c backgroundCtx) Value(key any) any {
+func (c backgroundCtx) Value(key interface{}) interface{} {
 	if Reference {
-		return c.ctx.Value(key)
+		return c.c.Value(key)
 	}
 	return nil
 }
 
 type valueCtx struct {
+	c context.Context
 	Context
-	c        context.Context
-	key, val any
+	key, val interface{}
 }
 
-func WithValue(parent Context, key, val any) Context {
+func WithValue(parent Context, key, val interface{}) Context {
 	if Reference {
-		return context.WithValue(parent.(context.Context), key, val)
+		return &valueCtx{c: context.WithValue(parent.(context.Context), key, val)}
 	}
 	return &valueCtx{Context: parent, key: key, val: val}
 }
-func (c *valueCtx) Value(key any) any {
+func (c *valueCtx) Value(key interface{}) interface{} {
 	if Reference {
 		return c.c.Value(key)
 	}
@@ -52,22 +53,31 @@ func (c *valueCtx) Value(key any) any {
 }
 
 type cancelCtx struct {
+	c context.Context
 	Context
-	c    context.Context
 	done chan struct{}
 }
 
-func WithCancel(parent Context) (Context, func()) {
+func WithCancel(parent Context, timeout time.Duration) (ctx Context, cancel func()) {
 	if Reference {
-		return context.WithCancel(parent.(context.Context))
+		var c, cancel = context.WithCancel(parent.(context.Context))
+		return &cancelCtx{c: c}, cancel
 	}
-	var c = &cancelCtx{c: parent.(context.Context)}
+	var c = &cancelCtx{Context: parent, done: make(chan struct{})}
 	go func() {
 		select {
 		case <-parent.Done():
 			close(c.done)
-		case <-c.Done():
+		case <-time.After(timeout):
+			close(c.done)
+		case <-c.done:
 		}
 	}()
 	return c, func() { close(c.done) }
+}
+func (c *cancelCtx) Done() <-chan struct{} {
+	if Reference {
+		return c.c.Done()
+	}
+	return c.done
 }
